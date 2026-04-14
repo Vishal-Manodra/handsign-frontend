@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from "react";
 import Webcam from "react-webcam";
 
-// The full, expanded dictionary of signs
+// 1. FULL LIST OF SIGNS
 const KNOWN_SIGNS = [
   "Peace", "Hello", "Pointing Up", "Fist", 
   "A", "L", "W", "Thank You", 
@@ -12,7 +12,6 @@ function App() {
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   
-  // UI and Game State
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState(""); 
   const [gesture, setGesture] = useState("Waiting...");
@@ -21,28 +20,23 @@ function App() {
   const [score, setScore] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false); 
 
-  // AI Logic Refs (Hidden from React re-renders for max speed)
   const lastSpokenRef = useRef("");
   const modeRef = useRef("Translate");
   const targetSignRef = useRef("Peace");
   const scoreRef = useRef(0);
   const cooldownRef = useRef(false);
   
-  // Motion Tracking & Stabilizer Refs
-  const gestureHistoryRef = useRef([]); // Tracks wrist Y-axis for "Thank You"
-  const consecutiveSignRef = useRef({ sign: "", count: 0 }); // Prevents flickering
-  const lockedGestureRef = useRef("Waiting..."); // The finalized, stable sign
+  const gestureHistoryRef = useRef([]); // For Motion signs
+  const consecutiveSignRef = useRef({ sign: "", count: 0 }); // For Stabilizer
+  const lockedGestureRef = useRef("Waiting..."); 
 
   const handleLogin = async (e) => {
     e.preventDefault();
     if (!username.trim()) return;
-
     try {
       const cleanUsername = encodeURIComponent(username.trim().toLowerCase());
-      // Fetches starting XP from your live Render cloud server
       const response = await fetch(`https://handsign-backend-tqvf.onrender.com/api/score/${cleanUsername}`);
       const data = await response.json();
-      
       setScore(data.highScore || 0);
       scoreRef.current = data.highScore || 0;
       setIsLoggedIn(true);
@@ -59,59 +53,44 @@ function App() {
   };
 
   const pickNewSign = () => {
-    const randomSign = KNOWN_SIGNS[Math.floor(Math.random() * KNOWN_SIGNS.length)];
-    setTargetSign(randomSign);
-    targetSignRef.current = randomSign;
+    let nextSign;
+    do {
+      nextSign = KNOWN_SIGNS[Math.floor(Math.random() * KNOWN_SIGNS.length)];
+    } while (nextSign === targetSignRef.current);
+    setTargetSign(nextSign);
+    targetSignRef.current = nextSign;
   };
 
-  // --- MATHEMATICAL AI HELPER FUNCTIONS ---
+  // --- MATH HELPERS ---
   const isFingerUp = (landmarks, tipIdx, knuckleIdx) => landmarks[tipIdx].y < landmarks[knuckleIdx].y;
   const isThumbOut = (landmarks) => Math.abs(landmarks[4].x - landmarks[17].x) > Math.abs(landmarks[2].x - landmarks[17].x);
-  
-  // Uses Pythagorean theorem to find distance between two points (for the OK sign)
-  const getDistance = (point1, point2) => {
-    return Math.sqrt(Math.pow(point1.x - point2.x, 2) + Math.pow(point1.y - point2.y, 2));
-  };
+  const getDistance = (p1, p2) => Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 
-  // --- CORE AI DICTIONARY ---
+  // --- AI LOGIC ---
   const labelGesture = (landmarks) => {
     const indexUp = isFingerUp(landmarks, 8, 6);
     const middleUp = isFingerUp(landmarks, 12, 10);
     const ringUp = isFingerUp(landmarks, 16, 14);
     const pinkyUp = isFingerUp(landmarks, 20, 18);
     const thumbOut = isThumbOut(landmarks);
+    const distThumbIndex = getDistance(landmarks[4], landmarks[8]);
 
-    // Track wrist for motion signs
-    const wrist = landmarks[0];
-    gestureHistoryRef.current.push(wrist);
-    if (gestureHistoryRef.current.length > 15) {
-      gestureHistoryRef.current.shift(); 
+    // Motion Buffer
+    gestureHistoryRef.current.push(landmarks[0]);
+    if (gestureHistoryRef.current.length > 15) gestureHistoryRef.current.shift();
+
+    // 1. Thank You (Motion)
+    if (indexUp && middleUp && ringUp && pinkyUp && gestureHistoryRef.current.length === 15) {
+      const move = gestureHistoryRef.current[14].y - gestureHistoryRef.current[0].y;
+      if (move > 0.08) { gestureHistoryRef.current = []; return "Thank You"; }
     }
 
-    // 1. MOTION DETECTION: "Thank You"
-    const isFlatHand = indexUp && middleUp && ringUp && pinkyUp;
-    if (isFlatHand && gestureHistoryRef.current.length === 15) {
-      const startY = gestureHistoryRef.current[0].y;
-      const currentY = gestureHistoryRef.current[14].y;
-      const downwardMovement = currentY - startY;
-      
-      // If hand moved down by more than 8% of the screen
-      if (downwardMovement > 0.08) {
-        gestureHistoryRef.current = []; 
-        return "Thank You";
-      }
-    }
-
-    // 2. MATH DETECTION: "OK" Sign
-    // Are the thumb tip [4] and index tip [8] touching?
-    const distanceThumbIndex = getDistance(landmarks[4], landmarks[8]);
-    const isPinching = distanceThumbIndex < 0.05;
-
-    // 3. STATIC DICTIONARY
-    if (isPinching && middleUp && ringUp && pinkyUp) return "OK";
+    // 2. New Signs
+    if (distThumbIndex < 0.10 && middleUp && ringUp && pinkyUp) return "OK";
     if (indexUp && !middleUp && !ringUp && pinkyUp && thumbOut) return "I Love You";
     if (!indexUp && !middleUp && !ringUp && pinkyUp && thumbOut) return "Call Me";
 
+    // 3. Static Signs
     if (indexUp && middleUp && !ringUp && !pinkyUp && !thumbOut) return "Peace";
     if (indexUp && middleUp && ringUp && pinkyUp && thumbOut) return "Hello";
     if (indexUp && !middleUp && !ringUp && !pinkyUp && !thumbOut) return "Pointing Up";
@@ -119,7 +98,6 @@ function App() {
     if (indexUp && !middleUp && !ringUp && !pinkyUp && thumbOut) return "L";
     if (indexUp && middleUp && ringUp && !pinkyUp) return "W";
     if (!indexUp && !middleUp && !ringUp && !pinkyUp && !thumbOut) return "Fist";
-    
     return "Scanning...";
   };
 
@@ -130,178 +108,118 @@ function App() {
     }
   };
 
-  // --- THE MAIN WEBCAM LOOP ---
   function onResults(results) {
     if (!webcamRef.current || !canvasRef.current) return;
-
-    const canvasCtx = canvasRef.current.getContext("2d");
-    canvasCtx.save();
-    canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    canvasCtx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.save();
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
 
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       for (const landmarks of results.multiHandLandmarks) {
-        // Draw the neon skeleton
-        window.drawConnectors(canvasCtx, landmarks, window.HAND_CONNECTIONS, { color: "#ffffff", lineWidth: 3 });
-        window.drawLandmarks(canvasCtx, landmarks, { color: "#1cb0f6", lineWidth: 2, radius: 4 });
+        window.drawConnectors(ctx, landmarks, window.HAND_CONNECTIONS, { color: "#FFF", lineWidth: 3 });
+        window.drawLandmarks(ctx, landmarks, { color: "#1CB0F6", lineWidth: 2, radius: 4 });
 
-        const rawDetected = labelGesture(landmarks);
-
-        // --- THE STABILIZER ---
-        if (rawDetected === "Thank You") {
-          // Motion bypasses the stabilizer
+        const raw = labelGesture(landmarks);
+        if (raw === "Thank You") {
           lockedGestureRef.current = "Thank You";
-          consecutiveSignRef.current = { sign: "Thank You", count: 15 };
-        } else if (rawDetected !== "Scanning...") {
-          // Static signs must be held steady for 15 frames
-          if (rawDetected === consecutiveSignRef.current.sign) {
-            consecutiveSignRef.current.count += 1;
+        } else if (raw !== "Scanning...") {
+          if (raw === consecutiveSignRef.current.sign) {
+            consecutiveSignRef.current.count++;
           } else {
-            consecutiveSignRef.current.sign = rawDetected;
-            consecutiveSignRef.current.count = 1;
+            consecutiveSignRef.current = { sign: raw, count: 1 };
           }
-
-          if (consecutiveSignRef.current.count >= 15) {
-            lockedGestureRef.current = rawDetected;
-          }
-        } else {
-           consecutiveSignRef.current.count = 0;
+          if (consecutiveSignRef.current.count >= 15) lockedGestureRef.current = raw;
         }
-
-        // Only update UI if the sign is locked and stable
         setGesture(lockedGestureRef.current);
 
-        // Game Logic
-        if (modeRef.current === "Translate") {
-          speak(lockedGestureRef.current);
-        } else if (modeRef.current === "Learn" && !cooldownRef.current) {
-          if (lockedGestureRef.current === targetSignRef.current) {
-            cooldownRef.current = true;
-            scoreRef.current += 10; 
-            setScore(scoreRef.current);
-            setShowSuccess(true); 
-            speak("Correct!");
-
-            // Save to cloud database
-            fetch("https://handsign-backend-tqvf.onrender.com/api/score", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ username, score: scoreRef.current })
-            }).catch(console.error);
-            
-            setTimeout(() => {
-              setShowSuccess(false);
-              pickNewSign();
-              lockedGestureRef.current = "Waiting..."; 
-              cooldownRef.current = false;
-            }, 2000);
-          }
+        if (modeRef.current === "Translate") speak(lockedGestureRef.current);
+        else if (modeRef.current === "Learn" && !cooldownRef.current && lockedGestureRef.current === targetSignRef.current) {
+          cooldownRef.current = true;
+          scoreRef.current += 10;
+          setScore(scoreRef.current);
+          setShowSuccess(true);
+          speak("Correct!");
+          fetch("https://handsign-backend-tqvf.onrender.com/api/score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, score: scoreRef.current })
+          }).catch(console.error);
+          setTimeout(() => {
+            setShowSuccess(false);
+            pickNewSign();
+            lockedGestureRef.current = "Waiting...";
+            cooldownRef.current = false;
+          }, 2000);
         }
       }
     } else {
-      // Reset everything if hand leaves the camera
       setGesture("No hand detected");
-      lastSpokenRef.current = "";
       lockedGestureRef.current = "Waiting...";
-      gestureHistoryRef.current = []; 
-      consecutiveSignRef.current = { sign: "", count: 0 };
+      consecutiveSignRef.current.count = 0;
     }
-    canvasCtx.restore();
+    ctx.restore();
   }
 
-  // --- CAMERA INITIALIZATION ---
   useEffect(() => {
     if (!isLoggedIn || !window.Hands) return;
-    let camera = null;
-    const hands = new window.Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    const hands = new window.Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
     hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
     hands.onResults(onResults);
-
+    let camera = null;
     const startCamera = () => {
-      // Prevents the "video is null" race condition crash
       if (webcamRef.current?.video?.readyState >= 2) {
         camera = new window.Camera(webcamRef.current.video, {
-          onFrame: async () => { 
-            if (webcamRef.current?.video) await hands.send({ image: webcamRef.current.video }); 
-          },
+          onFrame: async () => { if (webcamRef.current?.video) await hands.send({ image: webcamRef.current.video }); },
           width: 640, height: 480,
         });
         camera.start();
-      } else {
-        setTimeout(startCamera, 250);
-      }
+      } else { setTimeout(startCamera, 250); }
     };
     startCamera();
     return () => { if (camera) camera.stop(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoggedIn]); 
+  }, [isLoggedIn]);
 
-  // --- CSS STYLING ---
   const colors = { bg: "#131F24", card: "#202F36", primary: "#58CC02", text: "#FFFFFF", secondary: "#1CB0F6" };
 
-  // UI: LOGIN SCREEN
   if (!isLoggedIn) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: colors.bg, color: colors.text, fontFamily: "'Nunito', sans-serif" }}>
-        <div style={{ backgroundColor: colors.card, padding: "50px", borderRadius: "24px", textAlign: "center", boxShadow: "0px 8px 0px rgba(0,0,0,0.2)", width: "350px" }}>
-          <h1 style={{ color: colors.primary, fontSize: "2.5rem", margin: "0 0 10px 0" }}>SignAI</h1>
+        <div style={{ backgroundColor: colors.card, padding: "50px", borderRadius: "24px", textAlign: "center", width: "350px" }}>
+          <h1 style={{ color: colors.primary, fontSize: "2.5rem", margin: "0" }}>SignAI</h1>
           <p style={{ color: "#AFAFAF", marginBottom: "30px" }}>Master ASL with AI.</p>
           <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
-            <input type="text" placeholder="Enter Username" value={username} onChange={(e) => setUsername(e.target.value)} style={{ padding: "15px", fontSize: "16px", borderRadius: "12px", border: "2px solid #37464F", backgroundColor: "#131F24", color: "white", outline: "none" }} autoFocus />
-            <button type="submit" style={{ padding: "15px", fontSize: "18px", backgroundColor: colors.primary, color: "white", border: "none", borderRadius: "12px", fontWeight: "bold", cursor: "pointer", boxShadow: "0px 4px 0px #58A700", textTransform: "uppercase", letterSpacing: "1px" }}>START</button>
+            <input type="text" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} style={{ padding: "15px", borderRadius: "12px", border: "2px solid #37464F", backgroundColor: "#131F24", color: "white" }} />
+            <button type="submit" style={{ padding: "15px", backgroundColor: colors.primary, color: "white", borderRadius: "12px", fontWeight: "bold", cursor: "pointer" }}>START</button>
           </form>
         </div>
       </div>
     );
   }
 
-  // UI: MAIN APP
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minHeight: "100vh", backgroundColor: colors.bg, color: colors.text, fontFamily: "'Nunito', sans-serif", padding: "20px" }}>
-      
-      {/* Top Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", maxWidth: "800px", marginBottom: "30px", backgroundColor: colors.card, padding: "15px 30px", borderRadius: "20px" }}>
         <h2 style={{ margin: 0, color: colors.primary }}>SignAI</h2>
-        <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ color: "#AFAFAF", fontSize: "1rem" }}>{username}</span>
-          <span style={{ color: "#FFC800", backgroundColor: "rgba(255, 200, 0, 0.1)", padding: "5px 15px", borderRadius: "10px" }}>⚡ {score} XP</span>
-        </h3>
+        <h3 style={{ margin: 0 }}>⚡ {score} XP</h3>
       </div>
-
-      {/* Mode Toggle Buttons */}
       <div style={{ display: "flex", gap: "15px", marginBottom: "30px" }}>
-        <button onClick={() => switchMode("Translate")} style={{ padding: "12px 25px", fontSize: "16px", cursor: "pointer", backgroundColor: mode === "Translate" ? colors.secondary : colors.card, color: "white", border: "none", borderRadius: "12px", fontWeight: "bold", boxShadow: mode === "Translate" ? "0px 4px 0px #1899D6" : "0px 4px 0px rgba(0,0,0,0.2)" }}>Translate</button>
-        <button onClick={() => switchMode("Learn")} style={{ padding: "12px 25px", fontSize: "16px", cursor: "pointer", backgroundColor: mode === "Learn" ? colors.primary : colors.card, color: "white", border: "none", borderRadius: "12px", fontWeight: "bold", boxShadow: mode === "Learn" ? "0px 4px 0px #58A700" : "0px 4px 0px rgba(0,0,0,0.2)" }}>Learn</button>
+        <button onClick={() => switchMode("Translate")} style={{ padding: "12px 25px", backgroundColor: mode === "Translate" ? colors.secondary : colors.card, color: "white", border: "none", borderRadius: "12px", fontWeight: "bold" }}>Translate</button>
+        <button onClick={() => switchMode("Learn")} style={{ padding: "12px 25px", backgroundColor: mode === "Learn" ? colors.primary : colors.card, color: "white", border: "none", borderRadius: "12px", fontWeight: "bold" }}>Learn</button>
       </div>
-
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "40px", width: "100%", maxWidth: "1000px" }}>
-        
-        {/* Camera Container */}
-        <div style={{ position: "relative", borderRadius: "24px", overflow: "hidden", border: `6px solid ${showSuccess ? colors.primary : colors.card}`, transition: "border 0.3s ease", backgroundColor: "#000", width: "640px", height: "480px" }}>
+        <div style={{ position: "relative", borderRadius: "24px", overflow: "hidden", border: `6px solid ${showSuccess ? colors.primary : colors.card}`, width: "640px", height: "480px" }}>
           <Webcam ref={webcamRef} style={{ width: 640, height: 480, transform: "scaleX(-1)" }} mirrored={true} />
           <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: 640, height: 480, transform: "scaleX(-1)" }} />
-          
-          {/* Flash Green on Correct */}
           {showSuccess && (
             <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(88, 204, 2, 0.3)", display: "flex", justifyContent: "center", alignItems: "center" }}>
-              <h1 style={{ color: "white", fontSize: "4rem", textShadow: "0px 4px 10px rgba(0,0,0,0.5)", margin: 0, backgroundColor: colors.primary, padding: "10px 40px", borderRadius: "20px", transform: "rotate(-5deg)" }}>CORRECT!</h1>
+              <h1 style={{ color: "white", fontSize: "4rem", backgroundColor: colors.primary, padding: "10px 40px", borderRadius: "20px" }}>CORRECT!</h1>
             </div>
           )}
         </div>
-
-        {/* Readout Card */}
-        <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", backgroundColor: colors.card, padding: "40px", borderRadius: "24px", minWidth: "300px", boxShadow: "0px 8px 0px rgba(0,0,0,0.2)" }}>
-          {mode === "Translate" ? (
-            <>
-              <h3 style={{ margin: "0 0 20px 0", color: "#AFAFAF", textTransform: "uppercase", letterSpacing: "2px" }}>I see...</h3>
-              <p style={{ fontSize: "3rem", fontWeight: "bold", margin: 0, color: colors.secondary }}>{gesture}</p>
-            </>
-          ) : (
-            <>
-              <h3 style={{ margin: "0 0 20px 0", color: "#AFAFAF", textTransform: "uppercase", letterSpacing: "2px" }}>Show me the sign for</h3>
-              <p style={{ fontSize: "4rem", fontWeight: "bold", margin: 0, color: colors.primary, textAlign: "center" }}>{targetSign}</p>
-            </>
-          )}
+        <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", backgroundColor: colors.card, padding: "40px", borderRadius: "24px", minWidth: "300px" }}>
+          <h3 style={{ margin: "0 0 20px 0", color: "#AFAFAF" }}>{mode === "Translate" ? "I see..." : "Show the sign for"}</h3>
+          <p style={{ fontSize: "4rem", fontWeight: "bold", margin: 0, color: mode === "Translate" ? colors.secondary : colors.primary, textAlign: "center" }}>{mode === "Translate" ? gesture : targetSign}</p>
         </div>
       </div>
     </div>
