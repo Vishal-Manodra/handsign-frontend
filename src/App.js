@@ -1,13 +1,18 @@
 import React, { useRef, useEffect, useState } from "react";
 import Webcam from "react-webcam";
 
-// 1. ADDED "Thank You" to the target list!
-const KNOWN_SIGNS = ["Peace", "Hello", "Pointing Up", "Fist", "A", "B", "L", "W", "Thank You"];
+// The full, expanded dictionary of signs
+const KNOWN_SIGNS = [
+  "Peace", "Hello", "Pointing Up", "Fist", 
+  "A", "L", "W", "Thank You", 
+  "I Love You", "OK", "Call Me"
+];
 
 function App() {
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   
+  // UI and Game State
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState(""); 
   const [gesture, setGesture] = useState("Waiting...");
@@ -16,15 +21,17 @@ function App() {
   const [score, setScore] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false); 
 
+  // AI Logic Refs (Hidden from React re-renders for max speed)
   const lastSpokenRef = useRef("");
   const modeRef = useRef("Translate");
   const targetSignRef = useRef("Peace");
   const scoreRef = useRef(0);
   const cooldownRef = useRef(false);
   
-  // 2. NEW: THE MEMORY BUFFER
-  // This stores the last 15 frames of your wrist's position
-  const gestureHistoryRef = useRef([]);
+  // Motion Tracking & Stabilizer Refs
+  const gestureHistoryRef = useRef([]); // Tracks wrist Y-axis for "Thank You"
+  const consecutiveSignRef = useRef({ sign: "", count: 0 }); // Prevents flickering
+  const lockedGestureRef = useRef("Waiting..."); // The finalized, stable sign
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -32,6 +39,7 @@ function App() {
 
     try {
       const cleanUsername = encodeURIComponent(username.trim().toLowerCase());
+      // Fetches starting XP from your live Render cloud server
       const response = await fetch(`https://handsign-backend-tqvf.onrender.com/api/score/${cleanUsername}`);
       const data = await response.json();
       
@@ -56,10 +64,16 @@ function App() {
     targetSignRef.current = randomSign;
   };
 
+  // --- MATHEMATICAL AI HELPER FUNCTIONS ---
   const isFingerUp = (landmarks, tipIdx, knuckleIdx) => landmarks[tipIdx].y < landmarks[knuckleIdx].y;
   const isThumbOut = (landmarks) => Math.abs(landmarks[4].x - landmarks[17].x) > Math.abs(landmarks[2].x - landmarks[17].x);
+  
+  // Uses Pythagorean theorem to find distance between two points (for the OK sign)
+  const getDistance = (point1, point2) => {
+    return Math.sqrt(Math.pow(point1.x - point2.x, 2) + Math.pow(point1.y - point2.y, 2));
+  };
 
-  // 3. NEW: UPGRADED AI LOGIC WITH MOTION TRACKING
+  // --- CORE AI DICTIONARY ---
   const labelGesture = (landmarks) => {
     const indexUp = isFingerUp(landmarks, 8, 6);
     const middleUp = isFingerUp(landmarks, 12, 10);
@@ -67,43 +81,41 @@ function App() {
     const pinkyUp = isFingerUp(landmarks, 20, 18);
     const thumbOut = isThumbOut(landmarks);
 
-    // Track the wrist (landmark 0)
+    // Track wrist for motion signs
     const wrist = landmarks[0];
-    
-    // Push current wrist position into memory
     gestureHistoryRef.current.push(wrist);
-    
-    // Keep memory to a maximum of 15 frames (about 0.5 seconds of video)
     if (gestureHistoryRef.current.length > 15) {
       gestureHistoryRef.current.shift(); 
     }
 
-    // MOTION DETECTION: "Thank You"
-    // ASL Thank You: Flat hand (all fingers up) moving down/forward from the face.
+    // 1. MOTION DETECTION: "Thank You"
     const isFlatHand = indexUp && middleUp && ringUp && pinkyUp;
-    
     if (isFlatHand && gestureHistoryRef.current.length === 15) {
-      // Compare the wrist Y position from 15 frames ago to right now
       const startY = gestureHistoryRef.current[0].y;
       const currentY = gestureHistoryRef.current[14].y;
-      
-      // In MediaPipe, Y=0 is the top of the screen and Y=1 is the bottom.
-      // If currentY is much larger than startY, the hand moved DOWN.
       const downwardMovement = currentY - startY;
       
-      // If it moved down by more than 8% of the screen height, trigger the sign!
+      // If hand moved down by more than 8% of the screen
       if (downwardMovement > 0.08) {
-        gestureHistoryRef.current = []; // Clear memory so it doesn't spam
+        gestureHistoryRef.current = []; 
         return "Thank You";
       }
     }
 
-    // Static Dictionary
+    // 2. MATH DETECTION: "OK" Sign
+    // Are the thumb tip [4] and index tip [8] touching?
+    const distanceThumbIndex = getDistance(landmarks[4], landmarks[8]);
+    const isPinching = distanceThumbIndex < 0.05;
+
+    // 3. STATIC DICTIONARY
+    if (isPinching && middleUp && ringUp && pinkyUp) return "OK";
+    if (indexUp && !middleUp && !ringUp && pinkyUp && thumbOut) return "I Love You";
+    if (!indexUp && !middleUp && !ringUp && pinkyUp && thumbOut) return "Call Me";
+
     if (indexUp && middleUp && !ringUp && !pinkyUp && !thumbOut) return "Peace";
     if (indexUp && middleUp && ringUp && pinkyUp && thumbOut) return "Hello";
     if (indexUp && !middleUp && !ringUp && !pinkyUp && !thumbOut) return "Pointing Up";
     if (!indexUp && !middleUp && !ringUp && !pinkyUp && thumbOut) return "A";
-    if (indexUp && middleUp && ringUp && pinkyUp && !thumbOut) return "B";
     if (indexUp && !middleUp && !ringUp && !pinkyUp && thumbOut) return "L";
     if (indexUp && middleUp && ringUp && !pinkyUp) return "W";
     if (!indexUp && !middleUp && !ringUp && !pinkyUp && !thumbOut) return "Fist";
@@ -118,6 +130,7 @@ function App() {
     }
   };
 
+  // --- THE MAIN WEBCAM LOOP ---
   function onResults(results) {
     if (!webcamRef.current || !canvasRef.current) return;
 
@@ -128,22 +141,48 @@ function App() {
 
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       for (const landmarks of results.multiHandLandmarks) {
+        // Draw the neon skeleton
         window.drawConnectors(canvasCtx, landmarks, window.HAND_CONNECTIONS, { color: "#ffffff", lineWidth: 3 });
         window.drawLandmarks(canvasCtx, landmarks, { color: "#1cb0f6", lineWidth: 2, radius: 4 });
 
-        const detected = labelGesture(landmarks);
-        setGesture(detected);
+        const rawDetected = labelGesture(landmarks);
 
+        // --- THE STABILIZER ---
+        if (rawDetected === "Thank You") {
+          // Motion bypasses the stabilizer
+          lockedGestureRef.current = "Thank You";
+          consecutiveSignRef.current = { sign: "Thank You", count: 15 };
+        } else if (rawDetected !== "Scanning...") {
+          // Static signs must be held steady for 15 frames
+          if (rawDetected === consecutiveSignRef.current.sign) {
+            consecutiveSignRef.current.count += 1;
+          } else {
+            consecutiveSignRef.current.sign = rawDetected;
+            consecutiveSignRef.current.count = 1;
+          }
+
+          if (consecutiveSignRef.current.count >= 15) {
+            lockedGestureRef.current = rawDetected;
+          }
+        } else {
+           consecutiveSignRef.current.count = 0;
+        }
+
+        // Only update UI if the sign is locked and stable
+        setGesture(lockedGestureRef.current);
+
+        // Game Logic
         if (modeRef.current === "Translate") {
-          speak(detected);
+          speak(lockedGestureRef.current);
         } else if (modeRef.current === "Learn" && !cooldownRef.current) {
-          if (detected === targetSignRef.current) {
+          if (lockedGestureRef.current === targetSignRef.current) {
             cooldownRef.current = true;
             scoreRef.current += 10; 
             setScore(scoreRef.current);
             setShowSuccess(true); 
             speak("Correct!");
 
+            // Save to cloud database
             fetch("https://handsign-backend-tqvf.onrender.com/api/score", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -153,19 +192,24 @@ function App() {
             setTimeout(() => {
               setShowSuccess(false);
               pickNewSign();
+              lockedGestureRef.current = "Waiting..."; 
               cooldownRef.current = false;
             }, 2000);
           }
         }
       }
     } else {
+      // Reset everything if hand leaves the camera
       setGesture("No hand detected");
       lastSpokenRef.current = "";
-      gestureHistoryRef.current = []; // Clear memory if hand leaves the screen
+      lockedGestureRef.current = "Waiting...";
+      gestureHistoryRef.current = []; 
+      consecutiveSignRef.current = { sign: "", count: 0 };
     }
     canvasCtx.restore();
   }
 
+  // --- CAMERA INITIALIZATION ---
   useEffect(() => {
     if (!isLoggedIn || !window.Hands) return;
     let camera = null;
@@ -174,6 +218,7 @@ function App() {
     hands.onResults(onResults);
 
     const startCamera = () => {
+      // Prevents the "video is null" race condition crash
       if (webcamRef.current?.video?.readyState >= 2) {
         camera = new window.Camera(webcamRef.current.video, {
           onFrame: async () => { 
@@ -191,9 +236,10 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn]); 
 
-  // --- STYLES ---
+  // --- CSS STYLING ---
   const colors = { bg: "#131F24", card: "#202F36", primary: "#58CC02", text: "#FFFFFF", secondary: "#1CB0F6" };
 
+  // UI: LOGIN SCREEN
   if (!isLoggedIn) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", backgroundColor: colors.bg, color: colors.text, fontFamily: "'Nunito', sans-serif" }}>
@@ -209,8 +255,11 @@ function App() {
     );
   }
 
+  // UI: MAIN APP
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minHeight: "100vh", backgroundColor: colors.bg, color: colors.text, fontFamily: "'Nunito', sans-serif", padding: "20px" }}>
+      
+      {/* Top Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", maxWidth: "800px", marginBottom: "30px", backgroundColor: colors.card, padding: "15px 30px", borderRadius: "20px" }}>
         <h2 style={{ margin: 0, color: colors.primary }}>SignAI</h2>
         <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: "10px" }}>
@@ -218,20 +267,29 @@ function App() {
           <span style={{ color: "#FFC800", backgroundColor: "rgba(255, 200, 0, 0.1)", padding: "5px 15px", borderRadius: "10px" }}>⚡ {score} XP</span>
         </h3>
       </div>
+
+      {/* Mode Toggle Buttons */}
       <div style={{ display: "flex", gap: "15px", marginBottom: "30px" }}>
         <button onClick={() => switchMode("Translate")} style={{ padding: "12px 25px", fontSize: "16px", cursor: "pointer", backgroundColor: mode === "Translate" ? colors.secondary : colors.card, color: "white", border: "none", borderRadius: "12px", fontWeight: "bold", boxShadow: mode === "Translate" ? "0px 4px 0px #1899D6" : "0px 4px 0px rgba(0,0,0,0.2)" }}>Translate</button>
         <button onClick={() => switchMode("Learn")} style={{ padding: "12px 25px", fontSize: "16px", cursor: "pointer", backgroundColor: mode === "Learn" ? colors.primary : colors.card, color: "white", border: "none", borderRadius: "12px", fontWeight: "bold", boxShadow: mode === "Learn" ? "0px 4px 0px #58A700" : "0px 4px 0px rgba(0,0,0,0.2)" }}>Learn</button>
       </div>
+
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "40px", width: "100%", maxWidth: "1000px" }}>
+        
+        {/* Camera Container */}
         <div style={{ position: "relative", borderRadius: "24px", overflow: "hidden", border: `6px solid ${showSuccess ? colors.primary : colors.card}`, transition: "border 0.3s ease", backgroundColor: "#000", width: "640px", height: "480px" }}>
           <Webcam ref={webcamRef} style={{ width: 640, height: 480, transform: "scaleX(-1)" }} mirrored={true} />
           <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: 640, height: 480, transform: "scaleX(-1)" }} />
+          
+          {/* Flash Green on Correct */}
           {showSuccess && (
             <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(88, 204, 2, 0.3)", display: "flex", justifyContent: "center", alignItems: "center" }}>
               <h1 style={{ color: "white", fontSize: "4rem", textShadow: "0px 4px 10px rgba(0,0,0,0.5)", margin: 0, backgroundColor: colors.primary, padding: "10px 40px", borderRadius: "20px", transform: "rotate(-5deg)" }}>CORRECT!</h1>
             </div>
           )}
         </div>
+
+        {/* Readout Card */}
         <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", backgroundColor: colors.card, padding: "40px", borderRadius: "24px", minWidth: "300px", boxShadow: "0px 8px 0px rgba(0,0,0,0.2)" }}>
           {mode === "Translate" ? (
             <>
@@ -241,7 +299,7 @@ function App() {
           ) : (
             <>
               <h3 style={{ margin: "0 0 20px 0", color: "#AFAFAF", textTransform: "uppercase", letterSpacing: "2px" }}>Show me the sign for</h3>
-              <p style={{ fontSize: "5rem", fontWeight: "bold", margin: 0, color: colors.primary, textAlign: "center" }}>{targetSign}</p>
+              <p style={{ fontSize: "4rem", fontWeight: "bold", margin: 0, color: colors.primary, textAlign: "center" }}>{targetSign}</p>
             </>
           )}
         </div>
