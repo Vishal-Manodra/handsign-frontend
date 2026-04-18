@@ -45,7 +45,7 @@ function App() {
     const endpoint = isRegistering ? 'register' : 'login';
 
     try {
-      const response = await fetch(`https://handsign-backend-tqvf.onrender.com${endpoint}`, {
+      const response = await fetch(`https://handsign-backend-tqvf.onrender.com/api/auth/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -156,7 +156,7 @@ function App() {
           setShowSuccess(true);
           speak("Correct!");
           
-          fetch("https://handsign-backend-tqvf.onrender.com", {
+          fetch("https://handsign-backend-tqvf.onrender.com/api/score", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, score: scoreRef.current })
