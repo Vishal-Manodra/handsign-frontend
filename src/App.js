@@ -46,7 +46,6 @@ function App() {
 
     try {
       const response = await fetch(`https://handsign-backend-tqvf.onrender.com/api/auth/${endpoint}`, {
-        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
